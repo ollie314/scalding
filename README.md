@@ -4,7 +4,7 @@ Scalding is a Scala library that makes it easy to specify Hadoop MapReduce jobs.
 
 ![Scalding Logo](https://raw.github.com/twitter/scalding/develop/logo/scalding.png)
 
-Current version: `0.15.0`
+Current version: `0.16.0`
 
 ## Word Count
 
@@ -14,13 +14,14 @@ Hadoop is a distributed system for counting words. Here is how it's done in Scal
 package com.twitter.scalding.examples
 
 import com.twitter.scalding._
+import com.twitter.scalding.source.TypedText
 
 class WordCountJob(args: Args) extends Job(args) {
   TypedPipe.from(TextLine(args("input")))
     .flatMap { line => tokenize(line) }
     .groupBy { word => word } // use each word for a key
     .size // in each group, get the size
-    .write(TypedTsv[(String, Long)](args("output")))
+    .write(TypedText.tsv[(String, Long)](args("output")))
 
   // Split a piece of text into individual words.
   def tokenize(text: String): Array[String] = {
@@ -32,7 +33,7 @@ class WordCountJob(args: Args) extends Job(args) {
 
 Notice that the `tokenize` function, which is standard Scala, integrates naturally with the rest of the MapReduce job. This is a very powerful feature of Scalding. (Compare it to the use of UDFs in Pig.)
 
-You can find more example code under [examples/](https://github.com/twitter/scalding/tree/master/scalding-core/src/main/scala/com/twitter/scalding/examples). If you're interested in comparing Scalding to other languages, see our [Rosetta Code page](https://github.com/twitter/scalding/wiki/Rosetta-Code), which has several MapReduce tasks in Scalding and other frameworks (e.g., Pig and Hadoop Streaming).
+You can find more example code under [examples/](https://github.com/twitter/scalding/tree/master/scalding-commons/src/main/scala/com/twitter/scalding/examples). If you're interested in comparing Scalding to other languages, see our [Rosetta Code page](https://github.com/twitter/scalding/wiki/Rosetta-Code), which has several MapReduce tasks in Scalding and other frameworks (e.g., Pig and Hadoop Streaming).
 
 ## Documentation and Getting Started
 
@@ -51,8 +52,27 @@ You can find more example code under [examples/](https://github.com/twitter/scal
 
 Please feel free to use the beautiful [Scalding logo](https://drive.google.com/folderview?id=0B3i3pDi3yVgNbm9pMUdDcHFKVEk&usp=sharing) artwork anywhere.
 
-## Code of Conduct
-This, and all github.com/twitter projects, are under the [Twitter Open Source Code of Conduct](https://engineering.twitter.com/opensource/code-of-conduct). Additionally, see the [Typelevel Code of Conduct](http://typelevel.org/conduct) for specific examples of harassing behavior that are not tolerated.
+## Contact
+For user questions or scalding development (internals, extending, release planning):
+<https://groups.google.com/forum/#!forum/scalding-dev> (Google search also works as a first step)
+
+In the remote possibility that there exist bugs in this code, please report them to:
+<https://github.com/twitter/scalding/issues>
+
+Follow [@Scalding](http://twitter.com/scalding) on Twitter for updates.
+
+Chat: [![Gitter](https://badges.gitter.im/twitter/scalding.svg)](https://gitter.im/twitter/scalding?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
+
+## Get Involved + Code of Conduct
+Pull requests and bug reports are always welcome!
+
+We use a lightweight form of project governence inspired by the one used by Apache projects.
+Please see [Contributing and Committership](https://github.com/twitter/analytics-infra-governance#contributing-and-committership) for our code of conduct and our pull request review process.
+The TL;DR is send us a pull request, iterate on the feedback + discussion, and get a +1 from a [Committer](COMMITTERS.md) in order to get your PR accepted.
+
+The current list of active committers (who can +1 a pull request) can be found here: [Committers](COMMITTERS.md)
+
+A list of contributors to the project can be found here: [Contributors](https://github.com/twitter/scalding/graphs/contributors)
 
 ## Building
 There is a script (called sbt) in the root that loads the correct sbt version to build:
@@ -75,7 +95,7 @@ We use [Coveralls](https://coveralls.io/r/twitter/scalding) for code coverage re
 
 Scalding modules are available from maven central.
 
-The current groupid and version for all modules is, respectively, `"com.twitter"` and  `0.12.0`.
+The current groupid and version for all modules is, respectively, `"com.twitter"` and  `0.16.0-RC1`.
 
 Current published artifacts are
 
@@ -100,21 +120,6 @@ The suffix denotes the scala version.
 * Twitter
 
 To see a full list of users or to add yourself, see the [wiki](https://github.com/twitter/scalding/wiki/Powered-By)
-
-## Contact
-
-For user questions, we are using the cascading-user mailing list for discussions:
-<http://groups.google.com/group/cascading-user>
-
-For scalding development (internals, extending, release planning):
-<https://groups.google.com/forum/#!forum/scalding-dev>
-
-In the remote possibility that there exist bugs in this code, please report them to:
-<https://github.com/twitter/scalding/issues>
-
-Follow [@Scalding](http://twitter.com/scalding) on Twitter for updates.
-
-Chat (IRC): [freenode](https://webchat.freenode.net/) channel: #scalding
 
 ## Authors:
 * Avi Bryant <http://twitter.com/avibryant>

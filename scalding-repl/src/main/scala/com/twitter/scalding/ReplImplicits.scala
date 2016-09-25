@@ -17,6 +17,8 @@ package com.twitter.scalding
 
 import cascading.flow.FlowDef
 import cascading.pipe.Pipe
+import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.fs.{ FsShell, FileSystem }
 import typed.KeyedListLike
 import scala.util.{ Failure, Success }
 import scala.concurrent.{ Future, ExecutionContext => ConcurrentExecutionContext }
@@ -40,30 +42,86 @@ trait BaseReplState {
    * If the repl is started in Hdfs mode, this field is used to preserve the settings
    * when switching Modes.
    */
-  private[scalding] var storedHdfsMode: Option[Hdfs] = None
+  var storedHdfsMode: Option[Hdfs] = None
 
   /** Switch to Local mode */
-  def useLocalMode() { mode = Local(false) }
-  def useStrictLocalMode() { mode = Local(true) }
+  def useLocalMode(): Unit = {
+    mode = Local(false)
+    printModeBanner()
+  }
+
+  def useStrictLocalMode(): Unit = {
+    mode = Local(true)
+    printModeBanner()
+  }
 
   /** Switch to Hdfs mode */
-  private def useHdfsMode_() {
+  private def useHdfsMode_(): Unit = {
     storedHdfsMode match {
       case Some(hdfsMode) => mode = hdfsMode
       case None => println("To use HDFS/Hadoop mode, you must *start* the repl in hadoop mode to get the hadoop configuration from the hadoop command.")
     }
   }
 
-  def useHdfsMode() {
+  def useHdfsMode(): Unit = {
     useHdfsMode_()
     customConfig -= mr1Key
     customConfig -= mr2Key
+    printModeBanner()
   }
 
-  def useHdfsLocalMode() {
+  def useHdfsLocalMode(): Unit = {
     useHdfsMode_()
     customConfig += mr1Key -> mrLocal
     customConfig += mr2Key -> mrLocal
+    printModeBanner()
+  }
+
+  private[scalding] def printModeBanner(): Unit = {
+    val (modeString, homeDir) = mode match {
+      case localMode: Local => {
+        (localMode.toString, System.getProperty("user.dir"))
+      }
+      case hdfsMode: Hdfs => {
+        val defaultFs = FileSystem.get(hdfsMode.jobConf)
+        val m = customConfig.get(mr2Key) match {
+          case Some("local") =>
+            s"${hdfsMode.getClass.getSimpleName}Local(${hdfsMode.strict})"
+          case _ =>
+            s"${hdfsMode.getClass.getSimpleName}(${hdfsMode.strict})"
+        }
+        (m, defaultFs.getWorkingDirectory.toString)
+      }
+    }
+    println(s"${Console.GREEN}#### Scalding mode: ${modeString}")
+    println(s"#### User home: ${homeDir}${Console.RESET}")
+  }
+
+  private def modeHadoopConf: Configuration = {
+    mode match {
+      case hdfsMode: Hdfs => hdfsMode.jobConf
+      case _ => new Configuration(false)
+    }
+  }
+
+  /**
+   * Access to Hadoop FsShell
+   *
+   * @param cmdArgs list of command line parameters for FsShell, one per method argument
+   * @return
+   */
+  def fsShellExp(cmdArgs: String*): Int = {
+    new FsShell(modeHadoopConf).run(cmdArgs.toArray)
+  }
+
+  /**
+   * Access to Hadoop FsShell
+   *
+   * @param cmdLine command line parameters for FsShell as a single string
+   * @return
+   */
+  def fsShell(cmdLine: String): Int = {
+    new FsShell(modeHadoopConf).run(cmdLine.trim.split(" "))
   }
 
   /**
@@ -105,7 +163,7 @@ trait BaseReplState {
   /**
    * Sets the flow definition in implicit scope to an empty flow definition.
    */
-  def resetFlowDef() {
+  def resetFlowDef(): Unit = {
     flowDef = getEmptyFlowDef
   }
 

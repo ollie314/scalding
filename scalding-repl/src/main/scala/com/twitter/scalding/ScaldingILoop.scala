@@ -16,19 +16,46 @@
 package com.twitter.scalding
 
 import java.io.File
+import java.io.BufferedReader
 
 import scala.tools.nsc.interpreter.IR
+import scala.tools.nsc.interpreter.JPrintWriter
 import scala.tools.nsc.GenericRunnerSettings
+
+object ScaldingILoop {
+  /**
+   * Search for files with the given name in all directories from current directory
+   * up to root.
+   */
+  private[scalding] def findAllUpPath(currentDir: String)(filename: String): List[File] = {
+    val matchingFiles = for {
+      ancestor <- Iterator
+        .iterate(currentDir)(new File(_).getParent)
+        .takeWhile(_ != "/")
+
+      children: Array[File] = Option(new File(ancestor).listFiles)
+        .getOrElse {
+          println(s"The directory '$ancestor' could not be accessed while looking for '$filename'")
+          Array.empty
+        }
+
+      child <- children if child.toString.endsWith(filename)
+    } yield child
+
+    matchingFiles.toList
+  }
+}
 
 /**
  * A class providing Scalding specific commands for inclusion in the Scalding REPL.
  */
-class ScaldingILoop
-  extends ILoopCompat {
+class ScaldingILoop(in: Option[BufferedReader], out: JPrintWriter)
+  extends ILoopCompat(in, out) {
+  def this() = this(None, new JPrintWriter(Console.out, true))
 
   settings = new GenericRunnerSettings({ s => echo(s) })
 
-  override def printWelcome() {
+  override def printWelcome(): Unit = {
     val fc = Console.YELLOW
     val wc = Console.RED
     def wrapFlames(s: String) = s.replaceAll("[()]+", fc + "$0" + wc)
@@ -65,16 +92,6 @@ class ScaldingILoop
     else intp.interpret("import " + ids.mkString(", "))
 
   /**
-   * Search for files with the given name in all directories from current directory
-   * up to root.
-   */
-  private def findAllUpPath(filename: String): List[File] =
-    Iterator.iterate(System.getProperty("user.dir"))(new File(_).getParent)
-      .takeWhile(_ != "/")
-      .flatMap(new File(_).listFiles.filter(_.toString.endsWith(filename)))
-      .toList
-
-  /**
    * Gets the list of commands that this REPL supports.
    *
    * @return a list of the command supported by this REPL.
@@ -87,15 +104,17 @@ class ScaldingILoop
     "com.twitter.scalding.ReplImplicitContext._",
     "com.twitter.scalding.ReplState._")
 
-  override def createInterpreter() {
+  override def createInterpreter(): Unit = {
     super.createInterpreter()
     intp.beQuietDuring {
       addImports(imports: _*)
 
       settings match {
         case s: GenericRunnerSettings =>
-          findAllUpPath(".scalding_repl").reverse.foreach {
-            f => s.loadfiles.appendToValue(f.toString)
+          val cwd = System.getProperty("user.dir")
+
+          ScaldingILoop.findAllUpPath(cwd)(".scalding_repl").reverse.foreach { f =>
+            s.loadfiles.appendToValue(f.toString)
           }
         case _ => ()
       }

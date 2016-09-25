@@ -21,8 +21,8 @@ import java.util.Random
 import cascading.flow.FlowDef
 import cascading.pipe.{ Each, Pipe }
 import cascading.tap.Tap
-import cascading.tuple.{ Fields, Tuple => CTuple, TupleEntry }
-import com.twitter.algebird.{ Aggregator, Monoid, Semigroup }
+import cascading.tuple.{ Fields, TupleEntry }
+import com.twitter.algebird.{ Aggregator, Batched, Monoid, Semigroup }
 import com.twitter.scalding.TupleConverter.{ TupleEntryConverter, singleConverter, tuple2Converter }
 import com.twitter.scalding.TupleSetter.{ singleSetter, tup2Setter }
 import com.twitter.scalding._
@@ -419,19 +419,21 @@ trait TypedPipe[+T] extends Serializable {
 
   private[this] def defaultSeed: Long = System.identityHashCode(this) * 2654435761L ^ System.currentTimeMillis
   /**
-   * Sample uniformly independently at random each element of the pipe
+   * Sample a fraction (between 0 and 1) uniformly independently at random each element of the pipe
    * does not require a reduce step.
    */
-  def sample(percent: Double): TypedPipe[T] = sample(percent, defaultSeed)
+  def sample(fraction: Double): TypedPipe[T] = sample(fraction, defaultSeed)
   /**
-   * Sample uniformly independently at random each element of the pipe with
+   * Sample a fraction (between 0 and 1) uniformly independently at random each element of the pipe with
    * a given seed.
    * Does not require a reduce step.
    */
-  def sample(percent: Double, seed: Long): TypedPipe[T] = {
+  def sample(fraction: Double, seed: Long): TypedPipe[T] = {
+    require(0.0 <= fraction && fraction <= 1.0, s"got $fraction which is an invalid fraction")
+
     // Make sure to fix the seed, otherwise restarts cause subtle errors
     lazy val rand = new Random(seed)
-    filter(_ => rand.nextDouble < percent)
+    filter(_ => rand.nextDouble < fraction)
   }
 
   /**
@@ -469,7 +471,18 @@ trait TypedPipe[+T] extends Serializable {
    * Reasonably common shortcut for cases of total associative/commutative reduction
    * returns a ValuePipe with only one element if there is any input, otherwise EmptyValue.
    */
-  def sum[U >: T](implicit plus: Semigroup[U]): ValuePipe[U] = ComputedValue(groupAll.sum[U].values)
+  def sum[U >: T](implicit plus: Semigroup[U]): ValuePipe[U] = {
+    // every 1000 items, compact.
+    lazy implicit val batchedSG = Batched.compactingSemigroup[U](1000)
+    ComputedValue(map { t => ((), Batched[U](t)) }
+      .sumByLocalKeys
+      // remove the Batched before going to the reducers
+      .map { case (_, batched) => batched.sum }
+      .groupAll
+      .forceToReducers
+      .sum
+      .values)
+  }
 
   /**
    * Reasonably common shortcut for cases of associative/commutative reduction by Key
@@ -579,7 +592,7 @@ trait TypedPipe[+T] extends Serializable {
    * If you want to writeThrough to a specific file if it doesn't already exist,
    * and otherwise just read from it going forward, use this.
    */
-  def make[U >: T](dest: FileSource with TypedSink[T] with TypedSource[U]): Execution[TypedPipe[U]] =
+  def make[U >: T](dest: Source with TypedSink[T] with TypedSource[U]): Execution[TypedPipe[U]] =
     Execution.getMode.flatMap { mode =>
       try {
         dest.validateTaps(mode)
@@ -889,8 +902,6 @@ class TypedPipeFactory[T] private (@transient val next: NoStackAndThen[(FlowDef,
   override def flatMap[U](f: T => TraversableOnce[U]): TypedPipe[U] = andThen(_.flatMap(f))
   override def map[U](f: T => U): TypedPipe[U] = andThen(_.map(f))
 
-  override def limit(count: Int) = andThen(_.limit(count))
-
   override def sumByLocalKeys[K, V](implicit ev: T <:< (K, V), sg: Semigroup[V]) =
     andThen(_.sumByLocalKeys[K, V])
 
@@ -985,6 +996,23 @@ class TypedPipeInst[T] private[scalding] (@transient inpipe: Pipe,
     RichPipe(inpipe).flatMapTo[TupleEntry, U](fields -> fieldNames)(flatMapFn)
   }
 
+  override def sumByLocalKeys[K, V](implicit ev: T <:< (K, V), sg: Semigroup[V]): TypedPipe[(K, V)] = {
+    import Dsl.{ fields => ofields, _ }
+    val destFields: Fields = ('key, 'value)
+    val selfKV = raiseTo[(K, V)]
+
+    val msr = new TypedMapsideReduce[K, V](
+      flatMapFn.asInstanceOf[FlatMapFn[(K, V)]],
+      sg,
+      fields,
+      'key,
+      'value,
+      None)(tup2Setter)
+    TypedPipe.from[(K, V)](
+      inpipe.eachTo(fields -> destFields) { _ => msr },
+      destFields)(localFlowDef, mode, tuple2Converter)
+  }
+
   override def toIterableExecution: Execution[Iterable[T]] =
     openIfHead match {
       // TODO: it might be good to apply flatMaps locally,
@@ -1023,8 +1051,8 @@ final case class MergedTypedPipe[T](left: TypedPipe[T], right: TypedPipe[T]) ext
   override def flatMap[U](f: T => TraversableOnce[U]): TypedPipe[U] =
     MergedTypedPipe(left.flatMap(f), right.flatMap(f))
 
-  override def sample(percent: Double, seed: Long): TypedPipe[T] =
-    MergedTypedPipe(left.sample(percent, seed), right.sample(percent, seed))
+  override def sample(fraction: Double, seed: Long): TypedPipe[T] =
+    MergedTypedPipe(left.sample(fraction, seed), right.sample(fraction, seed))
 
   override def sumByLocalKeys[K, V](implicit ev: T <:< (K, V), sg: Semigroup[V]): TypedPipe[(K, V)] =
     MergedTypedPipe(left.sumByLocalKeys, right.sumByLocalKeys)
@@ -1060,7 +1088,7 @@ final case class MergedTypedPipe[T](left: TypedPipe[T], right: TypedPipe[T]) ext
         case (pipe, 1) => pipe
         case (pipe, cnt) => pipe.flatMap(List.fill(cnt)(_).iterator)
       }
-      .map(_.toPipe[U](fieldNames)(flowDef, mode, setter))
+      .map(_.toPipe[U](fieldNames)(flowDef, mode, setter)) // linter:ignore
       .toList
 
     if (merged.size == 1) {

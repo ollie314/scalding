@@ -41,10 +41,12 @@ object ExecutionApp {
 
   def extractUserHadoopArgs(args: Array[String]): (HadoopArgs, NonHadoopArgs) = {
 
+    val argsWithLibJars = ExpandLibJarsGlobs(args)
+
     // This adds a look back mechanism to match on other hadoop args we need to support
     // currently thats just libjars
     val (hadoopArgs, tmpNonHadoop, finalLast) =
-      args.foldLeft(Array[String](), Array[String](), Option.empty[String]) {
+      argsWithLibJars.foldLeft(Array[String](), Array[String](), Option.empty[String]) {
         // Current is a -D, so store the last in non hadoop, and add current to hadoop args
         case ((hadoopArgs, nonHadoop, Some(l)), current) if dArgPattern.findFirstIn(current).isDefined =>
           (hadoopArgs :+ current, nonHadoop :+ l, None)
@@ -62,7 +64,10 @@ object ExecutionApp {
           (hadoopArgs, nonHadoop, Some(current))
       }
     // We can have something left in the last bucket, so extract it.
-    val nonHadoop = if (finalLast.isDefined) tmpNonHadoop :+ finalLast.get else tmpNonHadoop
+    val nonHadoop = finalLast match {
+      case Some(x) => tmpNonHadoop :+ x
+      case None => tmpNonHadoop
+    }
 
     // Throwaway hadoop config
     // see which of our hadoop config args are not ones
@@ -105,7 +110,7 @@ trait ExecutionApp extends java.io.Serializable {
     (config, mode)
   }
 
-  def main(args: Array[String]) {
+  def main(args: Array[String]): Unit = {
     config(args) match {
       case (conf, mode) => job.waitFor(conf, mode).get
     }

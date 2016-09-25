@@ -116,7 +116,7 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
    * Beginning of block with access to expensive nonserializable state. The state object should
    * contain a function release() for resource management purpose.
    */
-  def using[C <: { def release() }](bf: => C) = new {
+  def using[C <: { def release(): Unit }](bf: => C) = new {
 
     /**
      * For pure side effect.
@@ -125,7 +125,7 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
       conv.assertArityMatches(f)
       val newPipe = new Each(pipe, f, new SideEffectMapFunction(bf, fn,
         new Function1[C, Unit] with java.io.Serializable {
-          def apply(c: C) { c.release() }
+          def apply(c: C): Unit = { c.release() }
         },
         Fields.NONE, conv, set))
       NullSource.writeFrom(newPipe)(flowDef, mode)
@@ -140,7 +140,7 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
       set.assertArityMatches(fs._2)
       val mf = new SideEffectMapFunction(bf, fn,
         new Function1[C, Unit] with java.io.Serializable {
-          def apply(c: C) { c.release() }
+          def apply(c: C): Unit = { c.release() }
         },
         fs._2, conv, set)
       new Each(pipe, fs._1, mf, defaultMode(fs._1, fs._2))
@@ -154,7 +154,7 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
       set.assertArityMatches(fs._2)
       val mf = new SideEffectFlatMapFunction(bf, fn,
         new Function1[C, Unit] with java.io.Serializable {
-          def apply(c: C) { c.release() }
+          def apply(c: C): Unit = { c.release() }
         },
         fs._2, conv, set)
       new Each(pipe, fs._1, mf, defaultMode(fs._1, fs._2))
@@ -280,7 +280,7 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
 
   private def statefulRandom(optSeed: Option[Long]): Random with Stateful = {
     val random = new Random with Stateful
-    if (optSeed.isDefined) { random.setSeed(optSeed.get) }
+    optSeed.foreach { x => random.setSeed(x) }
     random
   }
 
@@ -556,20 +556,20 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
   def limit(n: Long): Pipe = new Each(pipe, new Limit(n))
 
   /**
-   * Sample percent of elements. percent should be between 0.00 (0%) and 1.00 (100%)
+   * Sample a fraction of elements. fraction should be between 0.00 (0%) and 1.00 (100%)
    * you can provide a seed to get reproducible results
    *
    */
-  def sample(percent: Double): Pipe = new Each(pipe, new Sample(percent))
-  def sample(percent: Double, seed: Long): Pipe = new Each(pipe, new Sample(seed, percent))
+  def sample(fraction: Double): Pipe = new Each(pipe, new Sample(fraction))
+  def sample(fraction: Double, seed: Long): Pipe = new Each(pipe, new Sample(seed, fraction))
 
   /**
-   * Sample percent of elements with return. percent should be between 0.00 (0%) and 1.00 (100%)
+   * Sample fraction of elements with return. fraction should be between 0.00 (0%) and 1.00 (100%)
    * you can provide a seed to get reproducible results
    *
    */
-  def sampleWithReplacement(percent: Double): Pipe = new Each(pipe, new SampleWithReplacement(percent), Fields.ALL)
-  def sampleWithReplacement(percent: Double, seed: Int): Pipe = new Each(pipe, new SampleWithReplacement(percent, seed), Fields.ALL)
+  def sampleWithReplacement(fraction: Double): Pipe = new Each(pipe, new SampleWithReplacement(fraction), Fields.ALL)
+  def sampleWithReplacement(fraction: Double, seed: Int): Pipe = new Each(pipe, new SampleWithReplacement(fraction, seed), Fields.ALL)
 
   /**
    * Print all the tuples that pass to stderr
@@ -748,5 +748,5 @@ class RichPipe(val pipe: Pipe) extends java.io.Serializable with JoinAlgorithms 
  * A simple trait for releasable resource. Provides noop implementation.
  */
 trait Stateful {
-  def release() {}
+  def release(): Unit = ()
 }

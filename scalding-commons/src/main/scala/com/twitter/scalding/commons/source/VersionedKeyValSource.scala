@@ -21,14 +21,14 @@ import cascading.pipe.Pipe
 import cascading.scheme.Scheme
 import cascading.tap.Tap
 import cascading.tuple.Fields
-import com.backtype.cascading.scheme.KeyValueByteScheme
-import com.backtype.cascading.tap.VersionedTap
-import com.backtype.cascading.tap.VersionedTap.TapMode
 import com.twitter.algebird.Monoid
 import com.twitter.bijection.Injection
 import com.twitter.chill.Externalizer
 import com.twitter.scalding.TDsl._
 import com.twitter.scalding._
+import com.twitter.scalding.commons.scheme.KeyValueByteScheme
+import com.twitter.scalding.commons.tap.VersionedTap
+import com.twitter.scalding.commons.tap.VersionedTap.TapMode
 import com.twitter.scalding.source.{ CheckedInversion, MaxFailuresCheck }
 import com.twitter.scalding.typed.KeyedListLike
 import com.twitter.scalding.typed.TypedSink
@@ -78,12 +78,14 @@ class VersionedKeyValSource[K, V](val path: String, val sourceVersion: Option[Lo
 
   def getTap(mode: TapMode) = {
     val tap = new VersionedTap(path, hdfsScheme, mode).setVersionsToKeep(versionsToKeep)
-    if (mode == TapMode.SOURCE && sourceVersion.isDefined)
-      tap.setVersion(sourceVersion.get)
-    else if (mode == TapMode.SINK && sinkVersion.isDefined)
-      tap.setVersion(sinkVersion.get)
-    else
-      tap
+    (sourceVersion, sinkVersion) match {
+      case (Some(v), _) if mode == TapMode.SOURCE =>
+        tap.setVersion(v)
+      case (_, Some(v)) if mode == TapMode.SINK =>
+        tap.setVersion(v)
+      case _ =>
+        tap
+    }
   }
 
   val source = getTap(TapMode.SOURCE)

@@ -17,12 +17,13 @@ package com.twitter.scalding.commons.source
 
 import org.scalatest.{ Matchers, WordSpec }
 import com.twitter.scalding._
+import com.twitter.scalding.commons.datastores.VersionedStore;
 import com.twitter.scalding.typed.IterablePipe
 import com.twitter.bijection.Injection
 import com.google.common.io.Files
-import com.backtype.hadoop.datastores.VersionedStore
 import org.apache.hadoop.mapred.JobConf
 
+import java.io.File
 // Use the scalacheck generators
 import scala.collection.mutable.Buffer
 
@@ -79,7 +80,7 @@ class VersionedKeyValSourceTest extends WordSpec with Matchers {
         }
       }
       .run
-      .finish
+      .finish()
   }
 
   "A MoreComplexTypedWriteIncrementalJob" should {
@@ -93,7 +94,7 @@ class VersionedKeyValSourceTest extends WordSpec with Matchers {
         }
       }
       .run
-      .finish
+      .finish()
   }
 
   "A ToIteratorJob" should {
@@ -105,7 +106,7 @@ class VersionedKeyValSourceTest extends WordSpec with Matchers {
           assert(keys.map { _ * 2 } === vals)
         }
         .run
-        .finish
+        .finish()
     }
   }
 
@@ -134,6 +135,7 @@ class VersionedKeyValSourceTest extends WordSpec with Matchers {
     val store = new VersionedStore(root.getAbsolutePath)
     versions foreach { v =>
       val p = store.createVersion(v)
+      new File(p).mkdirs()
       store.succeedVersion(p)
     }
 

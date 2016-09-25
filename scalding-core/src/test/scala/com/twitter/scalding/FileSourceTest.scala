@@ -15,8 +15,11 @@ limitations under the License.
 */
 package com.twitter.scalding
 
+import cascading.scheme.NullScheme
+import cascading.tuple.Fields
 import org.scalatest.{ Matchers, WordSpec }
 import org.apache.hadoop.conf.Configuration
+import org.apache.hadoop.mapred.JobConf
 
 class MultiTsvInputJob(args: Args) extends Job(args) {
   try {
@@ -36,6 +39,15 @@ class SequenceFileInputJob(args: Args) extends Job(args) {
   }
 }
 
+class MultipleTextLineFilesJob(args: Args) extends Job(args) {
+  try {
+    MultipleTextLineFiles(args.list("input"): _*).write(Tsv("output0"))
+  } catch {
+    case e: Exception => e.printStackTrace()
+  }
+
+}
+
 class FileSourceTest extends WordSpec with Matchers {
   import Dsl._
 
@@ -51,7 +63,7 @@ class FileSourceTest extends WordSpec with Matchers {
             }
         }
       .run
-      .finish
+      .finish()
   }
 
   "A WritableSequenceFile Source" should {
@@ -75,8 +87,23 @@ class FileSourceTest extends WordSpec with Matchers {
           }
       }
       .run
-      .finish
+      .finish()
   }
+
+  "A MultipleTextLineFiles Source" should {
+    JobTest(new MultipleTextLineFilesJob(_))
+      .arg("input", List("input0", "input1"))
+      .source(MultipleTextLineFiles("input0", "input1"), List("foobar", "helloworld"))
+      .sink[String](Tsv("output0")) { outBuf =>
+        "take multiple text files as input sources" in {
+          outBuf should have length 2
+          outBuf.toList shouldBe List("foobar", "helloworld")
+        }
+      }
+      .run
+      .finish()
+  }
+
   "TextLine.toIterator" should {
     "correctly read strings" in {
       TextLine("../tutorial/data/hello.txt").toIterator(Config.default, Local(true)).toList shouldBe List("Hello world", "Goodbye world")
@@ -85,6 +112,7 @@ class FileSourceTest extends WordSpec with Matchers {
 
   /**
    * The layout of the test data looks like this:
+   * /test_data/2013/02 does not exist
    *
    * /test_data/2013/03                 (dir with a single data file in it)
    * /test_data/2013/03/2013-03.txt
@@ -93,13 +121,21 @@ class FileSourceTest extends WordSpec with Matchers {
    * /test_data/2013/04/2013-04.txt
    * /test_data/2013/04/_SUCCESS
    *
-   * /test_data/2013/05                 (empty dir)
+   * /test_data/2013/05                 (logically empty dir: git does not support empty dirs)
    *
    * /test_data/2013/06                 (dir with only a _SUCCESS file)
    * /test_data/2013/06/_SUCCESS
+   *
+   * /test_data/2013/07
+   * /test_data/2013/07/2013-07.txt
+   * /test_data/2013/07/_SUCCESS
    */
   "default pathIsGood" should {
     import TestFileSource.pathIsGood
+    "reject a non-existing directory" in {
+      pathIsGood("test_data/2013/02/") shouldBe false
+      pathIsGood("test_data/2013/02/*") shouldBe false
+    }
 
     "accept a directory with data in it" in {
       pathIsGood("test_data/2013/03/") shouldBe true
@@ -111,8 +147,11 @@ class FileSourceTest extends WordSpec with Matchers {
       pathIsGood("test_data/2013/04/*") shouldBe true
     }
 
-    "reject an empty directory" in {
-      pathIsGood("test_data/2013/05/") shouldBe false
+    "accept a single directory without glob" in {
+      pathIsGood("test_data/2013/05/") shouldBe true
+    }
+
+    "reject a single directory glob with ignored files" in {
       pathIsGood("test_data/2013/05/*") shouldBe false
     }
 
@@ -125,12 +164,48 @@ class FileSourceTest extends WordSpec with Matchers {
     }
   }
 
+  "FileSource.globHasSuccessFile" should {
+    import TestFileSource.globHasSuccessFile
+    "accept a directory glob with only _SUCCESS" in {
+      globHasSuccessFile("test_data/2013/06/*") shouldBe true
+    }
+
+    "accept a directory glob with _SUCCESS and other hidden files" in {
+      globHasSuccessFile("test_data/2013/05/*") shouldBe true
+    }
+
+    "accept a directory glob with _SUCCESS and other non-hidden files" in {
+      globHasSuccessFile("test_data/2013/04/*") shouldBe true
+    }
+
+    "reject a path without glob" in {
+      globHasSuccessFile("test_data/2013/04/") shouldBe false
+    }
+
+    "reject a multi-dir glob without _SUCCESS" in {
+      globHasSuccessFile("test_data/2013/{02,03}/*") shouldBe false
+    }
+  }
+
   "success file source pathIsGood" should {
     import TestSuccessFileSource.pathIsGood
+
+    "reject a non-existing directory" in {
+      pathIsGood("test_data/2013/02/") shouldBe false
+      pathIsGood("test_data/2013/02/*") shouldBe false
+    }
 
     "reject a directory with data in it but no _SUCCESS file" in {
       pathIsGood("test_data/2013/03/") shouldBe false
       pathIsGood("test_data/2013/03/*") shouldBe false
+    }
+
+    "reject a single directory without glob" in {
+      pathIsGood("test_data/2013/05/") shouldBe false
+    }
+
+    "reject a single directory glob with only _SUCCESS and ignored files" in {
+      pathIsGood("test_data/2013/05/*") shouldBe false
     }
 
     "accept a directory with data and _SUCCESS in it when specified as a glob" in {
@@ -154,6 +229,59 @@ class FileSourceTest extends WordSpec with Matchers {
       pathIsGood("test_data/2013/06/") shouldBe false
     }
 
+    "reject a multi-dir glob with only one _SUCCESS" in {
+      pathIsGood("test_data/2013/{03,04}/*") shouldBe false
+    }
+
+    "accept a multi-dir glob if every dir has _SUCCESS" in {
+      pathIsGood("test_data/2013/{04,08}/*") shouldBe true
+    }
+
+    "accept a multi-dir glob if all dirs with non-hidden files have _SUCCESS while dirs with " +
+      "hidden ones don't" in {
+        pathIsGood("test_data/2013/{04,05}/*") shouldBe true
+      }
+
+    "accept a multi-dir glob if all dirs with non-hidden files have _SUCCESS while other dirs " +
+      "are empty or don't exist" in {
+        pathIsGood("test_data/2013/{02,04,05}/*") shouldBe true
+      }
+  }
+
+  "FixedPathSource.hdfsWritePath" should {
+    "crib if path == *" in {
+      intercept[AssertionError] { TestFixedPathSource("*").hdfsWritePath }
+    }
+
+    "crib if path == /*" in {
+      intercept[AssertionError] { TestFixedPathSource("/*").hdfsWritePath }
+    }
+
+    "remove /* from a path ending in /*" in {
+      TestFixedPathSource("test_data/2013/06/*").hdfsWritePath shouldBe "test_data/2013/06"
+    }
+
+    "leave path as-is when it ends in a directory name" in {
+      TestFixedPathSource("test_data/2013/06").hdfsWritePath shouldBe "test_data/2013/06"
+    }
+
+    "leave path as-is when it ends in a directory name/" in {
+      TestFixedPathSource("test_data/2013/06/").hdfsWritePath shouldBe "test_data/2013/06/"
+    }
+
+    "leave path as-is when it ends in * without a preceeding /" in {
+      TestFixedPathSource("test_data/2013/06*").hdfsWritePath shouldBe "test_data/2013/06*"
+    }
+  }
+
+  "invalid source input" should {
+    "Create an InvalidSourceTap an empty directory is given" in {
+      TestInvalidFileSource.createHdfsReadTap shouldBe a[InvalidSourceTap]
+    }
+    "Throw in toIterator because no data is present" in {
+      an[InvalidSourceException] should be thrownBy (
+        TestInvalidFileSource.toIterator(Config.default, Hdfs(true, new JobConf())))
+    }
   }
 }
 
@@ -175,6 +303,7 @@ object TestFileSource extends FileSource {
   val conf = new Configuration()
 
   def pathIsGood(p: String) = super.pathIsGood(testfsPathRoot + p, conf)
+  def globHasSuccessFile(p: String) = FileSource.globHasSuccessFile(testfsPathRoot + p, conf)
 }
 
 object TestSuccessFileSource extends FileSource with SuccessFileSource {
@@ -186,3 +315,20 @@ object TestSuccessFileSource extends FileSource with SuccessFileSource {
 
   def pathIsGood(p: String) = super.pathIsGood(testfsPathRoot + p, conf)
 }
+
+object TestInvalidFileSource extends FileSource with Mappable[String] {
+
+  override def hdfsPaths: Iterable[String] = Iterable("invalid_hdfs_path")
+  override def localPaths: Iterable[String] = Iterable("invalid_local_path")
+  override def hdfsScheme = new NullScheme(Fields.ALL, Fields.NONE)
+  override def converter[U >: String] =
+    TupleConverter.asSuperConverter[String, U](implicitly[TupleConverter[String]])
+
+  val conf = new Configuration()
+
+  def pathIsGood(p: String) = false // linter:ignore
+  val hdfsMode: Hdfs = Hdfs(false, conf)
+  def createHdfsReadTap = super.createHdfsReadTap(hdfsMode)
+}
+
+case class TestFixedPathSource(path: String*) extends FixedPathSource(path: _*)

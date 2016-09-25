@@ -39,20 +39,10 @@ object HistoryServiceWithData {
     val tasks = taskRuntimes.map { time =>
       val startTime = random.nextLong
       Task(
-        taskId = "foo",
         taskType = "REDUCE",
         status = "SUCCEEDED",
-        splits = Seq(),
         startTime = startTime,
-        finishTime = startTime + time,
-        taskAttemptId = "foo",
-        trackerName = "foo",
-        httpPort = random.nextInt,
-        hostname = "foo",
-        state = "foo",
-        error = "foo",
-        shuffleFinished = random.nextInt,
-        sortFinished = random.nextInt)
+        finishTime = startTime + time)
     }
 
     FlowStepHistory(
@@ -96,6 +86,22 @@ object ValidHistoryService extends HistoryServiceWithData {
         makeHistory(inputSize, inputSize / 2)))
 }
 
+object SmallDataExplosionHistoryService extends HistoryServiceWithData {
+  import HistoryServiceWithData._
+
+  def fetchHistory(info: FlowStrategyInfo, maxHistory: Int): Try[Seq[FlowStepHistory]] = {
+    // huge ratio, but data is still small overall
+
+    val outSize = inputSize * 1000
+
+    Success(
+      Seq(
+        makeHistory(inputSize, outSize),
+        makeHistory(inputSize, outSize),
+        makeHistory(inputSize, outSize)))
+  }
+}
+
 object InvalidHistoryService extends HistoryServiceWithData {
   import HistoryServiceWithData._
 
@@ -120,6 +126,10 @@ class ValidHistoryBasedEstimator extends RatioBasedEstimator {
   override val historyService = ValidHistoryService
 }
 
+class SmallDataExplosionHistoryBasedEstimator extends RatioBasedEstimator {
+  override val historyService = SmallDataExplosionHistoryService
+}
+
 class InvalidHistoryBasedEstimator extends RatioBasedEstimator {
   override val historyService = InvalidHistoryService
 }
@@ -141,7 +151,7 @@ class RatioBasedReducerEstimatorTest extends WordSpec with Matchers with HadoopS
           val conf = steps.head.getConfig
           conf.getNumReduceTasks should equal (1) // default
         }
-        .run
+        .run()
     }
 
     "not set reducers when error fetching history" in {
@@ -157,7 +167,7 @@ class RatioBasedReducerEstimatorTest extends WordSpec with Matchers with HadoopS
           val conf = steps.head.getConfig
           conf.getNumReduceTasks should equal (1) // default
         }
-        .run
+        .run()
     }
 
     "set reducers correctly when there is valid history" in {
@@ -177,7 +187,34 @@ class RatioBasedReducerEstimatorTest extends WordSpec with Matchers with HadoopS
           val conf = steps.head.getConfig
           conf.getNumReduceTasks should equal (2)
         }
-        .run
+        .run()
+    }
+
+    /*
+     * If the InputSizeReducerEstimator decides that less than 1 reducer is necessary, it
+     * rounds up to 1. If the RatioBasedEstimator relies on this, it will use the rounded-up
+     * value to calculate the number of reducers. In the case of data explosion on a small dataset,
+     * you end up with a very large number of reducers because this rounding error is multiplied.
+     * This regression test ensures that this is no longer the case.
+     *
+     * see https://github.com/twitter/scalding/issues/1541 for more details.
+     */
+    "handle mapper output explosion over small data correctly" in {
+      val customConfig = Config.empty
+        .addReducerEstimator(classOf[SmallDataExplosionHistoryBasedEstimator]) +
+        // set the bytes per reducer to to 500x input size, so that we estimate needing 2 reducers,
+        // even though there's a very large explosion in input data size, the data is still pretty small
+        (InputSizeReducerEstimator.BytesPerReducer -> (HistoryServiceWithData.inputSize * 500).toString) +
+        (RatioBasedEstimator.inputRatioThresholdKey -> 0.10f.toString)
+
+      HadoopPlatformJobTest(new SimpleJobWithNoSetReducers(_, customConfig), cluster)
+        .inspectCompletedFlow { flow =>
+          val steps = flow.getFlowSteps.asScala
+          steps should have size 1
+
+          val conf = steps.head.getConfig
+          conf.getNumReduceTasks should equal (2) // used to pick 1000 with the rounding error
+        }.run()
     }
 
     "not set reducers when there is no valid history" in {
@@ -193,7 +230,7 @@ class RatioBasedReducerEstimatorTest extends WordSpec with Matchers with HadoopS
           val conf = steps.head.getConfig
           conf.getNumReduceTasks should equal (1) // default
         }
-        .run
+        .run()
     }
   }
 }

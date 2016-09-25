@@ -29,7 +29,7 @@ import scala.collection.immutable.Queue
 import scala.language.experimental.macros
 
 trait LowerPriorityImplicit {
-  implicit def primitiveOrderedBufferSupplier[T] = macro impl.OrderedSerializationProviderImpl[T]
+  implicit def primitiveOrderedBufferSupplier[T]: OrderedSerialization[T] = macro impl.OrderedSerializationProviderImpl[T]
 }
 
 object LawTester {
@@ -81,6 +81,12 @@ object TestCC {
     } yield TestCaseClassD(aInt)
   }
 
+  implicit def arbitraryTestEE: Arbitrary[TestCaseClassE] = Arbitrary {
+    for {
+      aString <- arb[String]
+    } yield TestCaseClassE(aString)
+  }
+
   implicit def arbitraryTestObjectE: Arbitrary[TestObjectE.type] = Arbitrary {
     for {
       e <- Gen.const(TestObjectE)
@@ -95,7 +101,19 @@ object TestCC {
       t <- Gen.oneOf(cc, bb, dd, TestObjectE)
     } yield t
   }
+
+  implicit def arbitraryTestSealedAbstractClass: Arbitrary[TestSealedAbstractClass] = Arbitrary {
+    for {
+      testSealedAbstractClass <- Gen.oneOf(A, B)
+    } yield testSealedAbstractClass
+  }
+
 }
+
+sealed abstract class TestSealedAbstractClass(val name: Option[String])
+case object A extends TestSealedAbstractClass(None)
+case object B extends TestSealedAbstractClass(Some("b"))
+
 sealed trait SealedTraitTest
 case class TestCC(a: Int, b: Long, c: Option[Int], d: Double, e: Option[String], f: Option[List[String]], aBB: ByteBuffer) extends SealedTraitTest
 
@@ -103,7 +121,11 @@ case class TestCaseClassB(a: Int, b: Long, c: Option[Int], d: Double, e: Option[
 
 case class TestCaseClassD(a: Int) extends SealedTraitTest
 
+case class TestCaseClassE(a: String) extends AnyVal
+
 case object TestObjectE extends SealedTraitTest
+
+case class TypedParameterCaseClass[A](v: A)
 
 object MyData {
   implicit def arbitraryTestCC: Arbitrary[MyData] = Arbitrary {
@@ -239,7 +261,7 @@ class MacroOrderingProperties extends FunSuite with PropertyChecks with ShouldMa
     checkManyExplicit(i)
   }
 
-  def checkWithInputs[T](a: T, b: T)(implicit obuf: OrderedSerialization[T]) {
+  def checkWithInputs[T](a: T, b: T)(implicit obuf: OrderedSerialization[T]): Unit = {
     val rta = rt(a) // before we do anything ensure these don't throw
     val rtb = rt(b) // before we do anything ensure these don't throw
     val asize = Serialization.toBytes(a).length
@@ -257,7 +279,7 @@ class MacroOrderingProperties extends FunSuite with PropertyChecks with ShouldMa
     assert(oBufCompare(rta, rtb) === oBufCompare(a, b), "Comparing a and b with ordered bufferables compare after a serialization RT")
   }
 
-  def checkAreSame[T](a: T, b: T)(implicit obuf: OrderedSerialization[T]) {
+  def checkAreSame[T](a: T, b: T)(implicit obuf: OrderedSerialization[T]): Unit = {
     val rta = rt(a) // before we do anything ensure these don't throw
     val rtb = rt(b) // before we do anything ensure these don't throw
     assert(oBufCompare(rta, a) === 0, s"A should be equal to itself after an RT -- ${rt(a)}")
@@ -321,6 +343,30 @@ class MacroOrderingProperties extends FunSuite with PropertyChecks with ShouldMa
     checkMany[Int]
     checkCollisions[Int]
   }
+
+  test("Test out AnyVal of String") {
+    import TestCC._
+    check[TestCaseClassE]
+    checkMany[TestCaseClassE]
+    checkCollisions[TestCaseClassE]
+  }
+
+  test("Test out Tuple of AnyVal's of String") {
+    import TestCC._
+    primitiveOrderedBufferSupplier[(TestCaseClassE, TestCaseClassE)]
+    check[(TestCaseClassE, TestCaseClassE)]
+    checkMany[(TestCaseClassE, TestCaseClassE)]
+    checkCollisions[(TestCaseClassE, TestCaseClassE)]
+  }
+
+  test("Test out Tuple of TestSealedAbstractClass") {
+    import TestCC._
+    primitiveOrderedBufferSupplier[TestSealedAbstractClass]
+    check[TestSealedAbstractClass]
+    checkMany[TestSealedAbstractClass]
+    checkCollisions[TestSealedAbstractClass]
+  }
+
   test("Test out jl.Integer") {
     implicit val a = arbMap { b: Int => java.lang.Integer.valueOf(b) }
     check[java.lang.Integer]
@@ -657,6 +703,15 @@ class MacroOrderingProperties extends FunSuite with PropertyChecks with ShouldMa
     checkCollisions[Option[MacroOpaqueContainer]]
     check[List[MacroOpaqueContainer]]
     checkCollisions[List[MacroOpaqueContainer]]
+  }
+
+  def fn[A](implicit or: OrderedSerialization[A]): OrderedSerialization[TypedParameterCaseClass[A]] = {
+    primitiveOrderedBufferSupplier[TypedParameterCaseClass[A]]
+  }
+
+  test("Test out MacroOpaqueContainer inside a case class as an abstract type") {
+    fn[MacroOpaqueContainer]
+    primitiveOrderedBufferSupplier[(MacroOpaqueContainer, MacroOpaqueContainer)]
   }
 }
 

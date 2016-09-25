@@ -16,18 +16,20 @@ limitations under the License.
 package com.twitter.scalding
 
 import java.io.{ InputStream, OutputStream }
-import java.util.{ Map => JMap, Properties }
+import java.util.{ Map => JMap, Properties, UUID }
 
 import cascading.flow.FlowDef
 import cascading.flow.FlowProcess
 import cascading.scheme.{ NullScheme, Scheme }
 import cascading.tap.hadoop.Hfs
 import cascading.tap.SinkMode
-import cascading.tap.{ Tap, SinkTap }
-import cascading.tuple.{ Fields, Tuple => CTuple, TupleEntry, TupleEntryCollector }
+import cascading.tap.{ Tap, SourceTap, SinkTap }
+import cascading.tuple.{ Fields, Tuple => CTuple, TupleEntry, TupleEntryCollector, TupleEntryIterator }
 
 import cascading.pipe.Pipe
 
+import org.apache.hadoop.mapred.InputFormat
+import org.apache.hadoop.mapred.InputSplit
 import org.apache.hadoop.mapred.JobConf
 import org.apache.hadoop.mapred.OutputCollector
 import org.apache.hadoop.mapred.RecordReader
@@ -38,6 +40,59 @@ import scala.collection.JavaConverters._
  * thrown when validateTaps fails
  */
 class InvalidSourceException(message: String) extends RuntimeException(message)
+
+/**
+ * InvalidSourceTap used in createTap method when we want to defer
+ * the failures to validateTaps method.
+ *
+ * This is used because for Job classes, createTap method on sources is called
+ * when the class is initialized. In most cases though, we want any exceptions to be
+ * thrown by validateTaps method, which is called subsequently during flow planning.
+ *
+ * hdfsPaths represents user-supplied list that was detected as not containing any valid paths.
+ */
+class InvalidSourceTap(val hdfsPaths: Iterable[String]) extends SourceTap[JobConf, RecordReader[_, _]] {
+
+  private final val randomId = UUID.randomUUID.toString
+
+  override def getIdentifier: String = s"InvalidSourceTap-$randomId"
+
+  override def hashCode: Int = randomId.hashCode
+
+  override def getModifiedTime(conf: JobConf): Long = 0L
+
+  override def openForRead(flow: FlowProcess[JobConf], input: RecordReader[_, _]): TupleEntryIterator =
+    throw new InvalidSourceException(s"InvalidSourceTap: No good paths in $hdfsPaths")
+
+  override def resourceExists(conf: JobConf): Boolean = false
+
+  override def getScheme = new NullScheme()
+
+  // We set a dummy input format here so that mapred.input.format.class key is present,
+  // which is a requirement for casading's MultiInputFormat at flow plan time.
+  // So the order of operations here will be:
+  // 1. source.createTap
+  // 2. tap.sourceConfInit
+  // 3. scheme.sourceConfInit
+  // 4. source.validateTaps (throws InvalidSourceException)
+  // In the worst case if the flow plan is misconfigured,
+  // openForRead on mappers should fail when using this tap.
+  override def sourceConfInit(flow: FlowProcess[JobConf], conf: JobConf): Unit = {
+    conf.setInputFormat(classOf[InvalidInputFormat])
+    super.sourceConfInit(flow, conf)
+  }
+}
+
+/**
+ * Better error messaging for the occassion where an InvalidSourceTap does not
+ * fail in validation.
+ */
+private[scalding] class InvalidInputFormat extends InputFormat[Nothing, Nothing] {
+  override def getSplits(conf: JobConf, numSplits: Int): Nothing =
+    throw new InvalidSourceException("getSplits called on InvalidInputFormat")
+  override def getRecordReader(split: InputSplit, conf: JobConf, reporter: org.apache.hadoop.mapred.Reporter): Nothing =
+    throw new InvalidSourceException("getRecordReader called on InvalidInputFormat")
+}
 
 /*
  * Denotes the access mode for a Source
@@ -89,7 +144,7 @@ abstract class Source extends java.io.Serializable {
   def sourceId: String = toString
 
   def read(implicit flowDef: FlowDef, mode: Mode): Pipe = {
-    checkFlowDefNotNull
+    checkFlowDefNotNull()
 
     //workaround for a type erasure problem, this is a map of String -> Tap[_,_,_]
     val sources = flowDef.getSources().asInstanceOf[JMap[String, Any]]
@@ -115,7 +170,7 @@ abstract class Source extends java.io.Serializable {
    * the next operation
    */
   def writeFrom(pipe: Pipe)(implicit flowDef: FlowDef, mode: Mode): Pipe = {
-    checkFlowDefNotNull
+    checkFlowDefNotNull()
 
     //insane workaround for scala compiler bug
     val sinks = flowDef.getSinks.asInstanceOf[JMap[String, Any]]
@@ -132,7 +187,7 @@ abstract class Source extends java.io.Serializable {
     pipe
   }
 
-  protected def checkFlowDefNotNull(implicit flowDef: FlowDef, mode: Mode) {
+  protected def checkFlowDefNotNull()(implicit flowDef: FlowDef, mode: Mode): Unit = {
     assert(flowDef != null, "Trying to access null FlowDef while in mode: %s".format(mode))
   }
 
@@ -147,10 +202,11 @@ abstract class Source extends java.io.Serializable {
   /*
    * This throws InvalidSourceException if this source is invalid.
    */
-  def validateTaps(mode: Mode): Unit = {}
+  def validateTaps(mode: Mode): Unit = {} // linter:ignore
 
   @deprecated("replace with Mappable.toIterator", "0.9.0")
   def readAtSubmitter[T](implicit mode: Mode, conv: TupleConverter[T]): Stream[T] = {
+    validateTaps(mode)
     val tap = createTap(Read)(mode)
     mode.openForRead(Config.defaultFrom(mode), tap).asScala.map { conv(_) }.toStream
   }
@@ -185,6 +241,7 @@ trait Mappable[+T] extends Source with TypedSource[T] {
    * Typical use might be to read in Job.next to determine if another job is needed
    */
   def toIterator(implicit config: Config, mode: Mode): Iterator[T] = {
+    validateTaps(mode)
     val tap = createTap(Read)(mode)
     val conv = converter
     mode.openForRead(config, tap).asScala.map { te => conv(te.selectEntry(sourceFields)) }
@@ -211,9 +268,9 @@ class NullTap[Config, Input, Output, SourceContext, SinkContext]
   def getIdentifier = "nullTap"
   def openForWrite(flowProcess: FlowProcess[Config], output: Output) =
     new TupleEntryCollector {
-      override def add(te: TupleEntry) {}
-      override def add(t: CTuple) {}
-      protected def collect(te: TupleEntry) {}
+      override def add(te: TupleEntry): Unit = ()
+      override def add(t: CTuple): Unit = ()
+      protected def collect(te: TupleEntry): Unit = ()
     }
 
   def createResource(conf: Config) = true

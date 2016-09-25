@@ -56,7 +56,7 @@ class TsvWithHeader(p: String, f: Fields = Fields.UNKNOWN)(implicit mode: Mode)
       case Hdfs(_, conf) => {
         try {
           val pt = new Path(filename)
-          val fs = FileSystem.get(conf)
+          val fs = pt.getFileSystem(conf)
           fs.open(pt).readUTF
         } catch {
           case e: IOException => {
@@ -78,12 +78,12 @@ class TsvWithHeader(p: String, f: Fields = Fields.UNKNOWN)(implicit mode: Mode)
   }
 
   // TODO: move this method to make it a util function.
-  def writeToFile(filename: String, text: String)(implicit mode: Mode) {
+  def writeToFile(filename: String, text: String)(implicit mode: Mode): Unit = {
     mode match {
       case Hdfs(_, conf) => {
         try {
           val pt = new Path(filename)
-          val fs = FileSystem.get(conf)
+          val fs = pt.getFileSystem(conf)
           val br = new BufferedWriter(new OutputStreamWriter(fs.create(pt, true)))
 
           br.write(text)

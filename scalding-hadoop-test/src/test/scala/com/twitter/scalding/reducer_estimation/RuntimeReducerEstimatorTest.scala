@@ -5,7 +5,7 @@ import com.twitter.scalding.reducer_estimation.RuntimeReducerEstimator.{ Runtime
 import com.twitter.scalding.platform.{ HadoopPlatformJobTest, HadoopSharedPlatformTest }
 import org.scalatest.{ Matchers, WordSpec }
 import scala.collection.JavaConverters._
-import scala.util.{ Failure, Success, Try }
+import scala.util.{ Success, Try }
 
 object HistoryService1 extends HistoryServiceWithData {
   import HistoryServiceWithData._
@@ -35,7 +35,6 @@ class DummyEstimator extends ReducerEstimator {
 }
 
 class RuntimeReducerEstimatorTest extends WordSpec with Matchers with HadoopSharedPlatformTest {
-  import HipJob._
 
   "Single-step job with runtime-based reducer estimator" should {
     "set reducers correctly with median estimation scheme" in {
@@ -63,13 +62,13 @@ class RuntimeReducerEstimatorTest extends WordSpec with Matchers with HadoopShar
           // (1200 / inputSize) ms per byte
           // (1800 / inputSize) ms per byte
           //
-          // The mean of these is (1500 / inputSize) ms per byte,
+          // The median of these is (1500 / inputSize) ms per byte,
           // so we anticipate that processing (inputSize bytes)
           // will take 1500 ms total.
           // To do this in 25 ms, we need 60 reducers.
           assert(conf.getNumReduceTasks == 60)
         }
-        .run
+        .run()
     }
 
     "set reducers correctly with mean estimation scheme" in {
@@ -104,7 +103,7 @@ class RuntimeReducerEstimatorTest extends WordSpec with Matchers with HadoopShar
           // To do this in 25 ms, we need 61.03 reducers, which rounds up to 62.
           assert(conf.getNumReduceTasks == 62)
         }
-        .run
+        .run()
     }
 
     "set reducers correctly with mean estimation scheme ignoring input size" in {
@@ -134,7 +133,7 @@ class RuntimeReducerEstimatorTest extends WordSpec with Matchers with HadoopShar
           // To do this in 25 ms, we need 134 reducers.
           assert(conf.getNumReduceTasks == 134)
         }
-        .run
+        .run()
     }
 
     "set reducers correctly with median estimation scheme ignoring input size" in {
@@ -158,13 +157,13 @@ class RuntimeReducerEstimatorTest extends WordSpec with Matchers with HadoopShar
           //
           // We don't scale by input size.
           //
-          // The mean of these is 3600 ms, so we anticipate
-          // that the job will take 3600 ms total.
+          // The median of these is 3000 ms, so we anticipate
+          // that the job will take 3000 ms total.
           //
-          // To do this in 25 ms, we need 144 reducers.
-          assert(conf.getNumReduceTasks == 144)
+          // To do this in 25 ms, we need 120 reducers.
+          assert(conf.getNumReduceTasks == 120)
         }
-        .run
+        .run()
     }
 
     "not set reducers when history service is empty" in {
